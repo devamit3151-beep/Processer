@@ -9,6 +9,7 @@ const outputDir = path.join(root, "converted");
 const defaultReportFile = "designers-images-formatted.csv";
 const defaultTemplateFile = "designers-template.csv";
 const defaultOutputFile = "designers-template-with-media-gids.csv";
+const defaultRunFolder = "converted-files";
 const defaultTargetField = "hero_image";
 
 function splitCsvRecordsWithRaw(input) {
@@ -284,6 +285,7 @@ function formatTextLog(summary, logs, mediaMaps, config) {
     `Generated: ${new Date().toISOString()}`,
     `Map report: ${path.relative(root, config.reportPath)}`,
     `Import CSV: ${path.relative(root, config.templatePath)}`,
+    `Run folder: ${path.relative(root, config.outputRunDir)}`,
     `Output CSV: ${path.relative(root, config.outputCsvPath)}`,
     `Target field: ${config.targetField}`,
     "",
@@ -338,13 +340,14 @@ function printUsage() {
   console.log(`
 Usage:
   node scripts/replace-designer-hero-images.js
-  node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --output designers-template-with-media-gids.csv
+  node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --folder converted-files --output designers-template-with-media-gids.csv
 
 Options:
   --report    CSV from files/map-report, or a full/relative path
   --template  Import CSV from files/import-csv, or a full/relative path
   --field     Field column value to replace, for example hero_image
-  --output    Output CSV filename in converted, or a full/relative path
+  --folder    Run folder name in converted. Defaults to converted-files
+  --output    Output CSV filename inside the run folder
   --yes       Use defaults for missing options without prompting
   --strict    Exit with code 1 when not found / duplicate / skipped rows exist
   --help      Show this help
@@ -366,6 +369,8 @@ function parseArgs(argv) {
     else if (arg.startsWith("--template=")) options.template = arg.slice("--template=".length);
     else if (arg === "--field") options.field = argv[++i];
     else if (arg.startsWith("--field=")) options.field = arg.slice("--field=".length);
+    else if (arg === "--folder") options.folder = argv[++i];
+    else if (arg.startsWith("--folder=")) options.folder = arg.slice("--folder=".length);
     else if (arg === "--output") options.output = argv[++i];
     else if (arg.startsWith("--output=")) options.output = arg.slice("--output=".length);
     else throw new Error(`Unknown argument: ${arg}`);
@@ -383,20 +388,39 @@ function resolveInputPath(value, defaultDir) {
   return path.join(defaultDir, value);
 }
 
-function resolveOutputPath(value) {
+function resolveRunFolderParentAndName(value) {
   if (path.isAbsolute(value)) return value;
   if (value.includes("/") || value.includes("\\")) return path.resolve(root, value);
   return path.join(outputDir, value);
 }
 
-function companionOutputPaths(outputCsvPath) {
-  const parsed = path.parse(outputCsvPath);
-  const base = path.join(parsed.dir, parsed.name);
+function uniqueDirectory(parentDir, folderName) {
+  const safeFolderName = folderName || "converted-output";
+  let candidate = path.join(parentDir, safeFolderName);
+  let counter = 1;
+
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(parentDir, `${safeFolderName}-${counter}`);
+    counter += 1;
+  }
+
+  return candidate;
+}
+
+function buildRunOutputPaths(folderValue, outputValue) {
+  const requestedFolderPath = resolveRunFolderParentAndName(folderValue);
+  const parsedFolder = path.parse(requestedFolderPath);
+  const outputFileName = path.basename(outputValue || defaultOutputFile);
+  const finalOutputFileName = path.extname(outputFileName) ? outputFileName : `${outputFileName}.csv`;
+  const outputRunDir = uniqueDirectory(parsedFolder.dir, parsedFolder.base);
+  const outputCsvPath = path.join(outputRunDir, finalOutputFileName);
+  const outputBase = path.join(outputRunDir, path.parse(finalOutputFileName).name);
 
   return {
+    outputRunDir,
     outputCsvPath,
-    outputLogPath: `${base}.log`,
-    outputJsonLogPath: `${base}.log.json`,
+    outputLogPath: `${outputBase}.log`,
+    outputJsonLogPath: `${outputBase}.log.json`,
   };
 }
 
@@ -406,6 +430,7 @@ async function askForMissingOptions(options) {
       report: options.report || defaultReportFile,
       template: options.template || defaultTemplateFile,
       field: options.field || defaultTargetField,
+      folder: options.folder || defaultRunFolder,
       output: options.output || defaultOutputFile,
       strict: options.strict,
     };
@@ -431,12 +456,20 @@ async function askForMissingOptions(options) {
       defaultTargetField;
     const output =
       options.output ||
-      (await rl.question(`Output CSV in converted [${defaultOutputFile}]: `)) ||
+      (await rl.question(`Output CSV filename [${defaultOutputFile}]: `)) ||
       defaultOutputFile;
+    const folder =
+      options.folder ||
+      (await rl.question(`Run folder in converted [${defaultRunFolder}]: `)) ||
+      defaultRunFolder;
 
-    return { report, template, field, output, strict: options.strict };
+    return { report, template, field, folder, output, strict: options.strict };
   } finally {
     rl.close();
+  }
+
+  if (!config.outputRunDir.startsWith(outputDir) && !path.isAbsolute(config.outputRunDir)) {
+    throw new Error("Run folder could not be resolved.");
   }
 }
 
@@ -462,7 +495,7 @@ async function main() {
   }
 
   const chosen = await askForMissingOptions(cliOptions);
-  const outputPaths = companionOutputPaths(resolveOutputPath(chosen.output));
+  const outputPaths = buildRunOutputPaths(chosen.folder, chosen.output);
   const config = {
     reportPath: resolveInputPath(chosen.report, mapReportDir),
     templatePath: resolveInputPath(chosen.template, importCsvDir),
@@ -473,7 +506,7 @@ async function main() {
 
   validateConfig(config);
   fs.mkdirSync(outputDir, { recursive: true });
-  fs.mkdirSync(path.dirname(config.outputCsvPath), { recursive: true });
+  fs.mkdirSync(config.outputRunDir, { recursive: true });
 
   const reportRecords = readCsvRecords(config.reportPath);
   const templateRecords = readCsvRecords(config.templatePath);
@@ -511,6 +544,7 @@ async function main() {
   console.log(`Map report: ${path.relative(root, config.reportPath)}`);
   console.log(`Import CSV: ${path.relative(root, config.templatePath)}`);
   console.log(`Target field: ${config.targetField}`);
+  console.log(`Run folder: ${path.relative(root, config.outputRunDir)}`);
   console.log(`CSV: ${path.relative(root, config.outputCsvPath)}`);
   console.log(`Log: ${path.relative(root, config.outputLogPath)}`);
   console.log(`JSON log: ${path.relative(root, config.outputJsonLogPath)}`);

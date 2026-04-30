@@ -15,6 +15,10 @@ files/
   import-csv/
     designers-template.csv
 converted/
+  converted-files/
+    designers-template-with-media-gids.csv
+    designers-template-with-media-gids.log
+    designers-template-with-media-gids.log.json
 scripts/
   replace-designer-hero-images.js
 ```
@@ -23,7 +27,15 @@ Use `files/map-report` for Shopify image import report files.
 
 Use `files/import-csv` for metaobject import template files.
 
-The generated CSV and logs are saved in `converted`.
+Each run creates a separate folder inside `converted`.
+
+If the folder already exists, the script appends a number:
+
+```text
+converted/converted-files/
+converted/converted-files-1/
+converted/converted-files-2/
+```
 
 ## Required Input Formats
 
@@ -106,7 +118,8 @@ The script will ask:
 Map report CSV in files/map-report [designers-images-formatted.csv]:
 Import CSV in files/import-csv [designers-template.csv]:
 Field value to replace [hero_image]:
-Output CSV in converted [designers-template-with-media-gids.csv]:
+Output CSV filename [designers-template-with-media-gids.csv]:
+Run folder in converted [converted-files]:
 ```
 
 You can press Enter to use the default value shown in brackets.
@@ -119,7 +132,8 @@ Example answers:
 Map report CSV in files/map-report [designers-images-formatted.csv]: designers-images-formatted.csv
 Import CSV in files/import-csv [designers-template.csv]: designers-template.csv
 Field value to replace [hero_image]: hero_image
-Output CSV in converted [designers-template-with-media-gids.csv]: designers-template-with-media-gids.csv
+Output CSV filename [designers-template-with-media-gids.csv]: designers-template-with-media-gids.csv
+Run folder in converted [converted-files]: converted-files
 ```
 
 ## Command Line Use
@@ -127,7 +141,7 @@ Output CSV in converted [designers-template-with-media-gids.csv]: designers-temp
 You can also provide everything directly:
 
 ```powershell
-node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --output designers-template-with-media-gids.csv
+node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --folder converted-files --output designers-template-with-media-gids.csv
 ```
 
 This reads:
@@ -137,12 +151,18 @@ files/map-report/designers-images-formatted.csv
 files/import-csv/designers-template.csv
 ```
 
-And writes:
+And writes to a separate run folder:
 
 ```text
-converted/designers-template-with-media-gids.csv
-converted/designers-template-with-media-gids.log
-converted/designers-template-with-media-gids.log.json
+converted/converted-files/designers-template-with-media-gids.csv
+converted/converted-files/designers-template-with-media-gids.log
+converted/converted-files/designers-template-with-media-gids.log.json
+```
+
+If `converted/converted-files` already exists, the next run writes to:
+
+```text
+converted/converted-files-1/
 ```
 
 ## Options
@@ -151,7 +171,8 @@ converted/designers-template-with-media-gids.log.json
 --report    CSV from files/map-report, or a full/relative path
 --template  Import CSV from files/import-csv, or a full/relative path
 --field     Field column value to replace, for example hero_image
---output    Output CSV filename in converted, or a full/relative path
+--folder    Run folder name in converted. Defaults to converted-files
+--output    Output CSV filename inside the run folder
 --yes       Use defaults for missing options without prompting
 --strict    Exit with code 1 when not found / duplicate / skipped rows exist
 --help      Show help
@@ -168,19 +189,19 @@ node scripts/replace-designer-hero-images.js --yes
 Replace `hero_image`:
 
 ```powershell
-node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --output designers-template-with-media-gids.csv
+node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --folder converted-files --output designers-template-with-media-gids.csv
 ```
 
 Replace a different field:
 
 ```powershell
-node scripts/replace-designer-hero-images.js --report product-images-formatted.csv --template products-template.csv --field thumbnail_image --output products-template-with-media-gids.csv
+node scripts/replace-designer-hero-images.js --report product-images-formatted.csv --template products-template.csv --field thumbnail_image --folder converted-files --output products-template-with-media-gids.csv
 ```
 
 Use strict mode for validation:
 
 ```powershell
-node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --output designers-template-with-media-gids.csv --strict
+node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --folder converted-files --output designers-template-with-media-gids.csv --strict
 ```
 
 Strict mode makes the command fail when there are:
@@ -193,18 +214,38 @@ This is useful for checking data consistency before importing into Shopify.
 
 ## Output Files
 
-For an output file named:
+For this folder and output file:
 
 ```text
+converted-files
 designers-template-with-media-gids.csv
 ```
 
-The script creates:
+The script creates this folder:
 
 ```text
-converted/designers-template-with-media-gids.csv
-converted/designers-template-with-media-gids.log
-converted/designers-template-with-media-gids.log.json
+converted/converted-files/
+```
+
+Inside that folder, the script creates:
+
+```text
+converted/converted-files/designers-template-with-media-gids.csv
+converted/converted-files/designers-template-with-media-gids.log
+converted/converted-files/designers-template-with-media-gids.log.json
+```
+
+If that folder already exists, the next run creates:
+
+```text
+converted/converted-files-1/
+```
+
+Then:
+
+```text
+converted/converted-files-2/
+converted/converted-files-3/
 ```
 
 ### CSV Output
@@ -290,16 +331,16 @@ Recommended workflow:
 1. Put the Shopify image import report in `files/map-report`.
 2. Put the Shopify metaobject import CSV in `files/import-csv`.
 3. Run the script.
-4. Open the `.log` file in `converted`.
+4. Open the `.log` file in the new run folder inside `converted`.
 5. Review `NOT FOUND` and `DUPLICATE` entries.
-6. Import the generated CSV from `converted` into Shopify.
+6. Import the generated CSV from that run folder into Shopify.
 
 ## Current Designer Example
 
 For the current designer files:
 
 ```powershell
-node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --output designers-template-with-media-gids.csv
+node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --folder converted-files --output designers-template-with-media-gids.csv
 ```
 
 Expected output summary:
@@ -307,4 +348,3 @@ Expected output summary:
 ```text
 Target rows=1007, found=1002, replaced=1002, notFound=5
 ```
-
