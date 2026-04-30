@@ -1,13 +1,15 @@
 const fs = require("fs");
 const path = require("path");
+const readline = require("readline/promises");
 
 const root = path.resolve(__dirname, "..");
-const reportPath = path.join(root, "files", "map-report", "designers-images-formatted.csv");
-const templatePath = path.join(root, "files", "import-csv", "designers-template.csv");
+const mapReportDir = path.join(root, "files", "map-report");
+const importCsvDir = path.join(root, "files", "import-csv");
 const outputDir = path.join(root, "converted");
-const outputCsvPath = path.join(outputDir, "designers-template-with-media-gids.csv");
-const outputLogPath = path.join(outputDir, "designers-template-with-media-gids.log");
-const outputJsonLogPath = path.join(outputDir, "designers-template-with-media-gids.log.json");
+const defaultReportFile = "designers-images-formatted.csv";
+const defaultTemplateFile = "designers-template.csv";
+const defaultOutputFile = "designers-template-with-media-gids.csv";
+const defaultTargetField = "hero_image";
 
 function splitCsvRecordsWithRaw(input) {
   const records = [];
@@ -179,7 +181,7 @@ function buildMediaMaps(reportRecords) {
   return { byLink, byFileName, duplicates, skipped };
 }
 
-function replaceTemplateHeroImages(templateRecords, mediaMaps) {
+function replaceTemplateFieldImages(templateRecords, mediaMaps, targetField) {
   const headerCells = parseCsvLineWithSpans(templateRecords[0].raw);
   const header = indexHeaders(headerCells);
   const required = ["Handle", "Field", "Value"];
@@ -190,7 +192,7 @@ function replaceTemplateHeroImages(templateRecords, mediaMaps) {
 
   const logs = [];
   const output = [templateRecords[0].raw + templateRecords[0].newline];
-  let totalHeroRows = 0;
+  let totalTargetRows = 0;
   let found = 0;
   let alreadyGid = 0;
   let notFound = 0;
@@ -202,12 +204,12 @@ function replaceTemplateHeroImages(templateRecords, mediaMaps) {
     const rowNumber = i + 1;
     const field = cells[header.Field]?.value || "";
 
-    if (field !== "hero_image") {
+    if (field !== targetField) {
       output.push(record.raw + record.newline);
       continue;
     }
 
-    totalHeroRows += 1;
+    totalTargetRows += 1;
     const handle = cells[header.Handle]?.value || "";
     const valueCell = cells[header.Value];
     const currentValue = valueCell?.value || "";
@@ -215,7 +217,7 @@ function replaceTemplateHeroImages(templateRecords, mediaMaps) {
     if (!currentValue) {
       empty += 1;
       notFound += 1;
-      logs.push({ status: "NOT FOUND", rowNumber, handle, currentValue, reason: "empty hero_image value" });
+      logs.push({ status: "NOT FOUND", rowNumber, handle, field, currentValue, reason: `empty ${targetField} value` });
       output.push(record.raw + record.newline);
       continue;
     }
@@ -223,7 +225,7 @@ function replaceTemplateHeroImages(templateRecords, mediaMaps) {
     if (currentValue.startsWith("gid://shopify/MediaImage/")) {
       alreadyGid += 1;
       found += 1;
-      logs.push({ status: "FOUND", rowNumber, handle, currentValue, replacement: currentValue, matchType: "already gid" });
+      logs.push({ status: "FOUND", rowNumber, handle, field, currentValue, replacement: currentValue, matchType: "already gid" });
       output.push(record.raw + record.newline);
       continue;
     }
@@ -234,7 +236,7 @@ function replaceTemplateHeroImages(templateRecords, mediaMaps) {
 
     if (!match) {
       notFound += 1;
-      logs.push({ status: "NOT FOUND", rowNumber, handle, currentValue, reason: "no report match by URL or file name" });
+      logs.push({ status: "NOT FOUND", rowNumber, handle, field, currentValue, reason: "no report match by URL or file name" });
       output.push(record.raw + record.newline);
       continue;
     }
@@ -250,6 +252,7 @@ function replaceTemplateHeroImages(templateRecords, mediaMaps) {
       status: "FOUND",
       rowNumber,
       handle,
+      field,
       currentValue,
       replacement: match.gid,
       matchType: exactMatch ? "exact URL" : "file name fallback",
@@ -264,7 +267,8 @@ function replaceTemplateHeroImages(templateRecords, mediaMaps) {
     logs,
     summary: {
       totalTemplateRows: templateRecords.length - 1,
-      totalHeroRows,
+      totalTargetRows,
+      targetField,
       found,
       alreadyGid,
       replaced: found - alreadyGid,
@@ -274,33 +278,37 @@ function replaceTemplateHeroImages(templateRecords, mediaMaps) {
   };
 }
 
-function formatTextLog(summary, logs, mediaMaps) {
+function formatTextLog(summary, logs, mediaMaps, config) {
   const lines = [
-    "Designer hero image replacement log",
+    "Shopify media GID replacement log",
     `Generated: ${new Date().toISOString()}`,
+    `Map report: ${path.relative(root, config.reportPath)}`,
+    `Import CSV: ${path.relative(root, config.templatePath)}`,
+    `Output CSV: ${path.relative(root, config.outputCsvPath)}`,
+    `Target field: ${config.targetField}`,
     "",
     "Summary",
     `- Template rows: ${summary.totalTemplateRows}`,
-    `- Hero image rows: ${summary.totalHeroRows}`,
+    `- Target field rows: ${summary.totalTargetRows}`,
     `- Found: ${summary.found}`,
     `- Replaced: ${summary.replaced}`,
     `- Already GID: ${summary.alreadyGid}`,
     `- Not found: ${summary.notFound}`,
-    `- Empty hero_image values: ${summary.empty}`,
+    `- Empty target field values: ${summary.empty}`,
     `- Report duplicate warnings: ${mediaMaps.duplicates.length}`,
     `- Report skipped rows: ${mediaMaps.skipped.length}`,
     "",
-    "Hero image row details",
+    "Target field row details",
   ];
 
   for (const item of logs) {
     if (item.status === "FOUND") {
       lines.push(
-        `[FOUND] row=${item.rowNumber} handle=${item.handle} match=${item.matchType} value="${item.currentValue}" -> "${item.replacement}"`,
+        `[FOUND] row=${item.rowNumber} handle=${item.handle} field=${item.field} match=${item.matchType} value="${item.currentValue}" -> "${item.replacement}"`,
       );
     } else {
       lines.push(
-        `[NOT FOUND] row=${item.rowNumber} handle=${item.handle} reason="${item.reason}" value="${item.currentValue}"`,
+        `[NOT FOUND] row=${item.rowNumber} handle=${item.handle} field=${item.field} reason="${item.reason}" value="${item.currentValue}"`,
       );
     }
   }
@@ -326,26 +334,170 @@ function formatTextLog(summary, logs, mediaMaps) {
   return `${lines.join("\n")}\n`;
 }
 
-function main() {
-  fs.mkdirSync(outputDir, { recursive: true });
+function printUsage() {
+  console.log(`
+Usage:
+  node scripts/replace-designer-hero-images.js
+  node scripts/replace-designer-hero-images.js --report designers-images-formatted.csv --template designers-template.csv --field hero_image --output designers-template-with-media-gids.csv
 
-  const reportRecords = readCsvRecords(reportPath);
-  const templateRecords = readCsvRecords(templatePath);
+Options:
+  --report    CSV from files/map-report, or a full/relative path
+  --template  Import CSV from files/import-csv, or a full/relative path
+  --field     Field column value to replace, for example hero_image
+  --output    Output CSV filename in converted, or a full/relative path
+  --yes       Use defaults for missing options without prompting
+  --strict    Exit with code 1 when not found / duplicate / skipped rows exist
+  --help      Show this help
+`);
+}
+
+function parseArgs(argv) {
+  const options = {};
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+
+    if (arg === "--help" || arg === "-h") options.help = true;
+    else if (arg === "--yes" || arg === "-y") options.yes = true;
+    else if (arg === "--strict") options.strict = true;
+    else if (arg === "--report") options.report = argv[++i];
+    else if (arg.startsWith("--report=")) options.report = arg.slice("--report=".length);
+    else if (arg === "--template") options.template = argv[++i];
+    else if (arg.startsWith("--template=")) options.template = arg.slice("--template=".length);
+    else if (arg === "--field") options.field = argv[++i];
+    else if (arg.startsWith("--field=")) options.field = arg.slice("--field=".length);
+    else if (arg === "--output") options.output = argv[++i];
+    else if (arg.startsWith("--output=")) options.output = arg.slice("--output=".length);
+    else throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return options;
+}
+
+function resolveInputPath(value, defaultDir) {
+  if (path.isAbsolute(value)) return value;
+
+  const directPath = path.resolve(root, value);
+  if (fs.existsSync(directPath)) return directPath;
+
+  return path.join(defaultDir, value);
+}
+
+function resolveOutputPath(value) {
+  if (path.isAbsolute(value)) return value;
+  if (value.includes("/") || value.includes("\\")) return path.resolve(root, value);
+  return path.join(outputDir, value);
+}
+
+function companionOutputPaths(outputCsvPath) {
+  const parsed = path.parse(outputCsvPath);
+  const base = path.join(parsed.dir, parsed.name);
+
+  return {
+    outputCsvPath,
+    outputLogPath: `${base}.log`,
+    outputJsonLogPath: `${base}.log.json`,
+  };
+}
+
+async function askForMissingOptions(options) {
+  if (options.yes) {
+    return {
+      report: options.report || defaultReportFile,
+      template: options.template || defaultTemplateFile,
+      field: options.field || defaultTargetField,
+      output: options.output || defaultOutputFile,
+      strict: options.strict,
+    };
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  try {
+    const report =
+      options.report ||
+      (await rl.question(`Map report CSV in files/map-report [${defaultReportFile}]: `)) ||
+      defaultReportFile;
+    const template =
+      options.template ||
+      (await rl.question(`Import CSV in files/import-csv [${defaultTemplateFile}]: `)) ||
+      defaultTemplateFile;
+    const field =
+      options.field ||
+      (await rl.question(`Field value to replace [${defaultTargetField}]: `)) ||
+      defaultTargetField;
+    const output =
+      options.output ||
+      (await rl.question(`Output CSV in converted [${defaultOutputFile}]: `)) ||
+      defaultOutputFile;
+
+    return { report, template, field, output, strict: options.strict };
+  } finally {
+    rl.close();
+  }
+}
+
+function validateConfig(config) {
+  if (!fs.existsSync(config.reportPath)) {
+    throw new Error(`Map report CSV not found: ${config.reportPath}`);
+  }
+
+  if (!fs.existsSync(config.templatePath)) {
+    throw new Error(`Import CSV not found: ${config.templatePath}`);
+  }
+
+  if (!config.targetField) {
+    throw new Error("Target field cannot be empty.");
+  }
+}
+
+async function main() {
+  const cliOptions = parseArgs(process.argv.slice(2));
+  if (cliOptions.help) {
+    printUsage();
+    return;
+  }
+
+  const chosen = await askForMissingOptions(cliOptions);
+  const outputPaths = companionOutputPaths(resolveOutputPath(chosen.output));
+  const config = {
+    reportPath: resolveInputPath(chosen.report, mapReportDir),
+    templatePath: resolveInputPath(chosen.template, importCsvDir),
+    targetField: chosen.field,
+    strict: chosen.strict,
+    ...outputPaths,
+  };
+
+  validateConfig(config);
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.mkdirSync(path.dirname(config.outputCsvPath), { recursive: true });
+
+  const reportRecords = readCsvRecords(config.reportPath);
+  const templateRecords = readCsvRecords(config.templatePath);
 
   if (reportRecords.length === 0) throw new Error("Report CSV is empty.");
   if (templateRecords.length === 0) throw new Error("Template CSV is empty.");
 
   const mediaMaps = buildMediaMaps(reportRecords);
-  const result = replaceTemplateHeroImages(templateRecords, mediaMaps);
+  const result = replaceTemplateFieldImages(templateRecords, mediaMaps, config.targetField);
 
-  fs.writeFileSync(outputCsvPath, result.csv, "utf8");
-  fs.writeFileSync(outputLogPath, formatTextLog(result.summary, result.logs, mediaMaps), "utf8");
+  fs.writeFileSync(config.outputCsvPath, result.csv, "utf8");
+  fs.writeFileSync(config.outputLogPath, formatTextLog(result.summary, result.logs, mediaMaps, config), "utf8");
   fs.writeFileSync(
-    outputJsonLogPath,
+    config.outputJsonLogPath,
     JSON.stringify(
       {
+        config: {
+          mapReport: path.relative(root, config.reportPath),
+          importCsv: path.relative(root, config.templatePath),
+          outputCsv: path.relative(root, config.outputCsvPath),
+          targetField: config.targetField,
+        },
         summary: result.summary,
-        heroImageRows: result.logs,
+        targetFieldRows: result.logs,
         reportDuplicateWarnings: mediaMaps.duplicates,
         reportSkippedRows: mediaMaps.skipped,
       },
@@ -355,17 +507,26 @@ function main() {
     "utf8",
   );
 
-  console.log("Designer hero image replacement complete.");
-  console.log(`CSV: ${path.relative(root, outputCsvPath)}`);
-  console.log(`Log: ${path.relative(root, outputLogPath)}`);
-  console.log(`JSON log: ${path.relative(root, outputJsonLogPath)}`);
+  console.log("Shopify media GID replacement complete.");
+  console.log(`Map report: ${path.relative(root, config.reportPath)}`);
+  console.log(`Import CSV: ${path.relative(root, config.templatePath)}`);
+  console.log(`Target field: ${config.targetField}`);
+  console.log(`CSV: ${path.relative(root, config.outputCsvPath)}`);
+  console.log(`Log: ${path.relative(root, config.outputLogPath)}`);
+  console.log(`JSON log: ${path.relative(root, config.outputJsonLogPath)}`);
   console.log(
-    `Hero rows=${result.summary.totalHeroRows}, found=${result.summary.found}, replaced=${result.summary.replaced}, notFound=${result.summary.notFound}`,
+    `Target rows=${result.summary.totalTargetRows}, found=${result.summary.found}, replaced=${result.summary.replaced}, notFound=${result.summary.notFound}`,
   );
 
-  if (result.summary.notFound > 0 || mediaMaps.duplicates.length > 0 || mediaMaps.skipped.length > 0) {
+  if (
+    config.strict &&
+    (result.summary.notFound > 0 || mediaMaps.duplicates.length > 0 || mediaMaps.skipped.length > 0)
+  ) {
     process.exitCode = 1;
   }
 }
 
-main();
+main().catch((error) => {
+  console.error(`Error: ${error.message}`);
+  process.exitCode = 1;
+});
